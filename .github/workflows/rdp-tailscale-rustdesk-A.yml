@@ -261,98 +261,12 @@ jobs:
           netsh advfirewall firewall delete rule name=$udpName 2>$null
           netsh advfirewall firewall add rule name=$udpName dir=in action=allow protocol=UDP localport=21116
 
-      - name: Launch RustDesk (foreground) + Screenshot Upload
+      - name: Launch RustDesk (foreground)
         run: |
           $rdExe = "C:\Program Files\RustDesk\rustdesk.exe"
           Start-Process -FilePath $rdExe -ErrorAction SilentlyContinue
           Start-Sleep -Seconds 5
-
-          $screenshotPath = "$env:TEMP\rustdesk_${{ matrix.id }}.png"
-          Add-Type -AssemblyName System.Windows.Forms
-          Add-Type -AssemblyName System.Drawing
-          $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-          $bitmap = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
-          $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-          $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
-          $bitmap.Save($screenshotPath, [System.Drawing.Imaging.ImageFormat]::Png)
-          $graphics.Dispose(); $bitmap.Dispose()
-
-          Write-Host "Screenshot saved locally at: $screenshotPath"
-
-          # Try multiple upload services
-          $uploaded = $false
-          
-          # Method 1: Try file.io (simple, no account needed)
-          if (-not $uploaded) {
-            try {
-              Write-Host "Attempting upload to file.io..."
-              $fileBytes = [System.IO.File]::ReadAllBytes($screenshotPath)
-              $boundary = [System.Guid]::NewGuid().ToString()
-              $LF = "`r`n"
-              
-              $bodyLines = (
-                "--$boundary",
-                "Content-Disposition: form-data; name=`"file`"; filename=`"screenshot.png`"",
-                "Content-Type: image/png$LF",
-                [System.Text.Encoding]::GetEncoding("iso-8859-1").GetString($fileBytes),
-                "--$boundary--$LF"
-              ) -join $LF
-              
-              $response = Invoke-RestMethod -Uri "https://file.io/?expires=1d" -Method Post -ContentType "multipart/form-data; boundary=$boundary" -Body $bodyLines
-              
-              if ($response.success -and $response.link) {
-                "SCREENSHOT_URL=$($response.link)" | Out-File -Append $env:GITHUB_ENV
-                Write-Host "Screenshot uploaded to file.io: $($response.link)"
-                $uploaded = $true
-              }
-            } catch {
-              Write-Host "file.io upload failed: $($_.Exception.Message)"
-            }
-          }
-
-          # Method 2: Try 0x0.st (no account, simple)
-          if (-not $uploaded) {
-            try {
-              Write-Host "Attempting upload to 0x0.st..."
-              $form = @{
-                file = Get-Item -Path $screenshotPath
-              }
-              $response = Invoke-WebRequest -Uri "https://0x0.st" -Method Post -Form $form -ErrorAction Stop
-              $url = $response.Content.Trim()
-              
-              if ($url -match '^https?://') {
-                "SCREENSHOT_URL=$url" | Out-File -Append $env:GITHUB_ENV
-                Write-Host "Screenshot uploaded to 0x0.st: $url"
-                $uploaded = $true
-              }
-            } catch {
-              Write-Host "0x0.st upload failed: $($_.Exception.Message)"
-            }
-          }
-
-          # Method 3: Try transfer.sh
-          if (-not $uploaded) {
-            try {
-              Write-Host "Attempting upload to transfer.sh..."
-              $fileName = "screenshot_${{ matrix.id }}.png"
-              $response = Invoke-WebRequest -Uri "https://transfer.sh/$fileName" -Method Put -InFile $screenshotPath -ErrorAction Stop
-              $url = $response.Content.Trim()
-              
-              if ($url -match '^https?://') {
-                "SCREENSHOT_URL=$url" | Out-File -Append $env:GITHUB_ENV
-                Write-Host "Screenshot uploaded to transfer.sh: $url"
-                $uploaded = $true
-              }
-            } catch {
-              Write-Host "transfer.sh upload failed: $($_.Exception.Message)"
-            }
-          }
-
-          # If all methods failed
-          if (-not $uploaded) {
-            Write-Host "All upload methods failed. Screenshot saved locally only."
-            "SCREENSHOT_URL=Upload failed - screenshot saved locally at $screenshotPath" | Out-File -Append $env:GITHUB_ENV
-          }
+          Write-Host "RustDesk launched successfully"
 
       - name: Keep alive (to ${{ env.RUNTIME_MINUTES }} mins)
         run: |
@@ -360,7 +274,7 @@ jobs:
           $end = (Get-Date).AddMinutes($mins)
           while ((Get-Date) -lt $end) {
             $mode = if ("$env:CRD_ENABLED" -eq '1') { '[CRD+RustDesk/RDP]' } else { '[RustDesk/RDP]' }
-            Write-Host ("$mode Heartbeat " + (Get-Date).ToString("HH:mm:ss") + " ends at " + $end.ToString("HH:mm:ss") + " | RS URL: $env:SCREENSHOT_URL")
+            Write-Host ("$mode Heartbeat " + (Get-Date).ToString("HH:mm:ss") + " ends at " + $end.ToString("HH:mm:ss"))
             Start-Sleep -Seconds 60
           }
 
