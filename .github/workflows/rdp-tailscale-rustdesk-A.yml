@@ -261,7 +261,7 @@ jobs:
           netsh advfirewall firewall delete rule name=$udpName 2>$null
           netsh advfirewall firewall add rule name=$udpName dir=in action=allow protocol=UDP localport=21116
 
-      - name: Launch RustDesk (foreground) + Screenshot to Gofile
+      - name: Launch RustDesk (foreground) + Screenshot Upload
         run: |
           $rdExe = "C:\Program Files\RustDesk\rustdesk.exe"
           Start-Process -FilePath $rdExe -ErrorAction SilentlyContinue
@@ -277,38 +277,81 @@ jobs:
           $bitmap.Save($screenshotPath, [System.Drawing.Imaging.ImageFormat]::Png)
           $graphics.Dispose(); $bitmap.Dispose()
 
-          try {
-            $serverResponse = Invoke-RestMethod -Uri "https://api.gofile.io/getServer" -Method Get -ErrorAction Stop
-            
-            if ($serverResponse.status -eq "ok") {
-              $server = $serverResponse.data.server
-              $uploadUrl = "https://$server.gofile.io/uploadFile"
+          Write-Host "Screenshot saved locally at: $screenshotPath"
+
+          # Try multiple upload services
+          $uploaded = $false
+          
+          # Method 1: Try file.io (simple, no account needed)
+          if (-not $uploaded) {
+            try {
+              Write-Host "Attempting upload to file.io..."
+              $fileBytes = [System.IO.File]::ReadAllBytes($screenshotPath)
+              $boundary = [System.Guid]::NewGuid().ToString()
+              $LF = "`r`n"
               
-              $curlResult = curl -F "file=@$screenshotPath" $uploadUrl 2>&1
-              Write-Host "Upload response: $curlResult"
+              $bodyLines = (
+                "--$boundary",
+                "Content-Disposition: form-data; name=`"file`"; filename=`"screenshot.png`"",
+                "Content-Type: image/png$LF",
+                [System.Text.Encoding]::GetEncoding("iso-8859-1").GetString($fileBytes),
+                "--$boundary--$LF"
+              ) -join $LF
               
-              try {
-                $json = $curlResult | ConvertFrom-Json -ErrorAction Stop
-                
-                if ($json.status -eq "ok") {
-                  "SCREENSHOT_URL=$($json.data.downloadPage)" | Out-File -Append $env:GITHUB_ENV
-                  Write-Host "Screenshot uploaded successfully: $($json.data.downloadPage)"
-                } else {
-                  Write-Warning "Upload status not OK: $($json.status)"
-                  "SCREENSHOT_URL=Upload failed - status not OK" | Out-File -Append $env:GITHUB_ENV
-                }
-              } catch {
-                Write-Warning "Failed to parse JSON response: $($_.Exception.Message)"
-                Write-Host "Raw response: $curlResult"
-                "SCREENSHOT_URL=Screenshot upload failed - invalid response" | Out-File -Append $env:GITHUB_ENV
+              $response = Invoke-RestMethod -Uri "https://file.io/?expires=1d" -Method Post -ContentType "multipart/form-data; boundary=$boundary" -Body $bodyLines
+              
+              if ($response.success -and $response.link) {
+                "SCREENSHOT_URL=$($response.link)" | Out-File -Append $env:GITHUB_ENV
+                Write-Host "Screenshot uploaded to file.io: $($response.link)"
+                $uploaded = $true
               }
-            } else {
-              Write-Warning "Failed to get Gofile server"
-              "SCREENSHOT_URL=Failed to get upload server" | Out-File -Append $env:GITHUB_ENV
+            } catch {
+              Write-Host "file.io upload failed: $($_.Exception.Message)"
             }
-          } catch {
-            Write-Warning "Screenshot upload error: $($_.Exception.Message)"
-            "SCREENSHOT_URL=Screenshot upload failed" | Out-File -Append $env:GITHUB_ENV
+          }
+
+          # Method 2: Try 0x0.st (no account, simple)
+          if (-not $uploaded) {
+            try {
+              Write-Host "Attempting upload to 0x0.st..."
+              $form = @{
+                file = Get-Item -Path $screenshotPath
+              }
+              $response = Invoke-WebRequest -Uri "https://0x0.st" -Method Post -Form $form -ErrorAction Stop
+              $url = $response.Content.Trim()
+              
+              if ($url -match '^https?://') {
+                "SCREENSHOT_URL=$url" | Out-File -Append $env:GITHUB_ENV
+                Write-Host "Screenshot uploaded to 0x0.st: $url"
+                $uploaded = $true
+              }
+            } catch {
+              Write-Host "0x0.st upload failed: $($_.Exception.Message)"
+            }
+          }
+
+          # Method 3: Try transfer.sh
+          if (-not $uploaded) {
+            try {
+              Write-Host "Attempting upload to transfer.sh..."
+              $fileName = "screenshot_${{ matrix.id }}.png"
+              $response = Invoke-WebRequest -Uri "https://transfer.sh/$fileName" -Method Put -InFile $screenshotPath -ErrorAction Stop
+              $url = $response.Content.Trim()
+              
+              if ($url -match '^https?://') {
+                "SCREENSHOT_URL=$url" | Out-File -Append $env:GITHUB_ENV
+                Write-Host "Screenshot uploaded to transfer.sh: $url"
+                $uploaded = $true
+              }
+            } catch {
+              Write-Host "transfer.sh upload failed: $($_.Exception.Message)"
+            }
+          }
+
+          # If all methods failed
+          if (-not $uploaded) {
+            Write-Host "All upload methods failed. Screenshot saved locally only."
+            "SCREENSHOT_URL=Upload failed - screenshot saved locally at $screenshotPath" | Out-File -Append $env:GITHUB_ENV
           }
 
       - name: Keep alive (to ${{ env.RUNTIME_MINUTES }} mins)
