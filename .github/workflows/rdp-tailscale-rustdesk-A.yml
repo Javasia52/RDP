@@ -8,7 +8,7 @@ on:
       ts_authkey:         { description: "Tailscale Auth key (reusable or ephemeral)", required: true }
       quick_test:         { description: "Run 5-minute test", type: boolean, default: false }
       runtime_minutes:    { description: "Runtime (max 360; default 355 when not test)", required: false, default: "355" }
-      do_purge:           { description: "Purge Indonesia* devices at start (single instance only)", required: false, default: "true" }
+      do_purge:           { description: "Purge bullet* devices at start (single instance only)", required: false, default: "true" }
       cycles:             { description: "0=stop after A; N=handoffs left incl this run", required: false, default: "0" }
       rdp_count:          { description: "How many RDP instances (1-10) [ignored if CRD provided]", required: false, default: "1" }
       crd_code:
@@ -62,8 +62,8 @@ jobs:
       max-parallel: 10
     timeout-minutes: 370
     env:
-      RDP_USER: javasia
-      RDP_PASS: javasia@1945
+      RDP_USER: Bullettemporary
+      RDP_PASS: Bullet@12345
 
     steps:
       - name: Set CRD flag early (safe read)
@@ -160,7 +160,7 @@ jobs:
 
       - name: Decide hostname + runtime
         run: |
-          if ("${{ inputs.rdp_count }}" -gt 1) { $hn = "Indonesia${{ matrix.id }}" } else { $hn = "Indonesia" }
+          if ("${{ inputs.rdp_count }}" -gt 1) { $hn = "bullet${{ matrix.id }}" } else { $hn = "bullet" }
           "TS_HOSTNAME=$hn" | Out-File -Append $env:GITHUB_ENV
 
           function Yes($v){ "$v" -match '^(?i:true|1|yes|on)$' }
@@ -172,7 +172,7 @@ jobs:
           "RUNTIME_MINUTES=$runtime" | Out-File -Append $env:GITHUB_ENV
           Write-Host "Hostname: $hn  | Runtime: $runtime"
 
-      - name: Purge Indonesia* devices (single-instance only)
+      - name: Purge bullet* devices (single-instance only)
         if: ${{ needs.setup.outputs.multi == '0' }}
         run: |
           function Yes($v){ "$v" -match '^(?i:true|1|yes|on)$' }
@@ -182,11 +182,11 @@ jobs:
               $tn = [uri]::EscapeDataString("${{ inputs.ts_tailnet }}")
               $list = Invoke-RestMethod -Uri "https://api.tailscale.com/api/v2/tailnet/$tn/devices" -Headers @{ Authorization = "Basic $auth" }
               foreach($d in $list.devices){
-                if ($d.hostname -match '^Indonesia[0-9]*$'){
+                if ($d.hostname -match '^bullet[0-9]*$'){
                   Invoke-RestMethod -Method Delete -Uri "https://api.tailscale.com/api/v2/device/$($d.id)" -Headers @{ Authorization = "Basic $auth" } -ErrorAction SilentlyContinue
                 }
               }
-              Write-Host "Purged Indonesia* devices (if any)."
+              Write-Host "Purged bullet* devices (if any)."
             } catch { Write-Host "Purge warning: $($_.Exception.Message)" }
           } else {
             Write-Host "Purge disabled."
@@ -213,21 +213,17 @@ jobs:
           $u=$env:RDP_USER; $p=$env:RDP_PASS
           $sec = ConvertTo-SecureString $p -AsPlainText -Force
           if (-not (Get-LocalUser -Name $u -EA SilentlyContinue)) {
-            New-LocalUser -Name $u -Password $sec -AccountNeverExpires -PasswordNeverExpires
+            New-LocalUser -Name $u -Password $sec -AccountNeverExpires
             Add-LocalGroupMember -Group "Administrators" -Member $u
             Add-LocalGroupMember -Group "Remote Desktop Users" -Member $u
           } else {
-            Set-LocalUser -Name $u -Password $sec -AccountNeverExpires -PasswordNeverExpires
+            Set-LocalUser -Name $u -Password $sec -AccountNeverExpires
             Enable-LocalUser -Name $u
             Add-LocalGroupMember -Group "Administrators" -Member $u -EA SilentlyContinue
             Add-LocalGroupMember -Group "Remote Desktop Users" -Member $u -EA SilentlyContinue
           }
           Set-ItemProperty "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name fDenyTSConnections -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop" | Out-Null
-          
-          # Disable Network Level Authentication for easier connection
-          Set-ItemProperty "HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" -Name UserAuthentication -Value 0
-          
           Write-Host "RDP ready. user=$u pass=$p host=$env:TS_HOSTNAME ip=$env:TAILSCALE_IP"
 
       - name: Install Python libs (pyautogui/pynput/pillow)
@@ -254,24 +250,6 @@ jobs:
           if (-not (Test-Path $rdExe)) { Write-Error "RustDesk not found after install"; exit 1 }
           Write-Host "RustDesk installed."
 
-      - name: Configure RustDesk with custom settings
-        run: |
-          $rdExe = "C:\Program Files\RustDesk\rustdesk.exe"
-          
-          # Generate random RustDesk ID and password for this session
-          $rdId = -join ((48..57) + (65..90) + (97..122) | Get-Random -Count 9 | ForEach-Object {[char]$_})
-          $rdPass = -join ((48..57) + (65..90) + (97..122) | Get-Random -Count 12 | ForEach-Object {[char]$_})
-          
-          # Try to configure RustDesk (may not work on all versions)
-          try {
-            & $rdExe --password $rdPass 2>$null
-          } catch {
-            Write-Host "RustDesk auto-config not supported, will use default settings"
-          }
-          
-          "RUSTDESK_ID=$rdId" | Out-File -Append $env:GITHUB_ENV
-          "RUSTDESK_PASS=$rdPass" | Out-File -Append $env:GITHUB_ENV
-
       - name: Open RustDesk ports (TCP 21115-21119, UDP 21116)
         run: |
           for ($p=21115; $p -le 21119; $p++) {
@@ -287,127 +265,18 @@ jobs:
         run: |
           $rdExe = "C:\Program Files\RustDesk\rustdesk.exe"
           Start-Process -FilePath $rdExe -ErrorAction SilentlyContinue
-          Start-Sleep -Seconds 8
-          
-          # Try to get RustDesk ID from config
-          $configPath = "$env:APPDATA\RustDesk\config\RustDesk2.toml"
-          if (Test-Path $configPath) {
-            $content = Get-Content $configPath -Raw
-            if ($content -match 'id\s*=\s*"([^"]+)"') {
-              $actualId = $matches[1]
-              "RUSTDESK_ID=$actualId" | Out-File -Append $env:GITHUB_ENV
-              Write-Host "RustDesk ID detected: $actualId"
-            }
-          }
-          
+          Start-Sleep -Seconds 5
           Write-Host "RustDesk launched successfully"
-
-      - name: Create Desktop Connection Info File
-        run: |
-          $info = @"
-═══════════════════════════════════════════════════════════════
-                    REMOTE CONNECTION INFORMATION
-═══════════════════════════════════════════════════════════════
-
-HOSTNAME (Tailscale): $env:TS_HOSTNAME
-TAILSCALE IP: $env:TAILSCALE_IP
-
-RDP CREDENTIALS:
-  User: $env:RDP_USER
-  Pass: $env:RDP_PASS
-
-RUSTDESK INFO:
-  ID: $env:RUSTDESK_ID
-  Pass: $env:RUSTDESK_PASS
-
-═══════════════════════════════════════════════════════════════
-                         HOW TO CONNECT
-═══════════════════════════════════════════════════════════════
-
-METHOD 1: RDP via Tailscale (Recommended)
-------------------------------------------
-1. Install Tailscale on your computer
-2. Login to Tailscale with the same account
-3. Open Remote Desktop Connection (mstsc.exe)
-4. Connect to: $env:TS_HOSTNAME (or $env:TAILSCALE_IP)
-5. Login with:
-   Username: $env:RDP_USER
-   Password: $env:RDP_PASS
-
-METHOD 2: RustDesk (Direct, No VPN needed)
--------------------------------------------
-1. Install RustDesk from: https://rustdesk.com
-2. Open RustDesk application
-3. Enter ID: $env:RUSTDESK_ID
-4. Click Connect
-5. Enter password: $env:RUSTDESK_PASS
-
-METHOD 3: Chrome Remote Desktop (if configured)
-------------------------------------------------
-1. Go to: https://remotedesktop.google.com/access
-2. Find your device and click to connect
-
-═══════════════════════════════════════════════════════════════
-                    TROUBLESHOOTING TIPS
-═══════════════════════════════════════════════════════════════
-
-If RDP Connection Fails:
-  • Make sure Tailscale is connected on your computer
-  • Check that device "$env:TS_HOSTNAME" appears in Tailscale admin panel
-  • Try using IP directly: $env:TAILSCALE_IP
-  • Make sure Windows Firewall allows RDP
-
-If RustDesk Connection Fails:
-  • Check RustDesk ID is correct (case-sensitive)
-  • Make sure you have internet connection
-  • Try restarting RustDesk application
-
-Session Duration: $env:RUNTIME_MINUTES minutes
-Session Ends At: $(((Get-Date).AddMinutes([int]$env:RUNTIME_MINUTES)).ToString("HH:mm:ss"))
-
-═══════════════════════════════════════════════════════════════
-"@
-          
-          Write-Host $info
-          
-          # Save to file in workspace
-          $infoFile = "$env:GITHUB_WORKSPACE\CONNECTION_INFO.txt"
-          Set-Content -Path $infoFile -Value $info -Encoding UTF8
-          Write-Host "`nConnection info saved to: $infoFile"
-
-      - name: Upload Connection Info
-        uses: actions/upload-artifact@v4
-        with:
-          name: connection-info-${{ matrix.id }}
-          path: CONNECTION_INFO.txt
-          retention-days: 1
 
       - name: Keep alive (to ${{ env.RUNTIME_MINUTES }} mins)
         run: |
           $mins = [int]"${{ env.RUNTIME_MINUTES }}"
           $end = (Get-Date).AddMinutes($mins)
-          $counter = 0
-          
           while ((Get-Date) -lt $end) {
-            $counter++
             $mode = if ("$env:CRD_ENABLED" -eq '1') { '[CRD+RustDesk/RDP]' } else { '[RustDesk/RDP]' }
-            $remaining = [math]::Round((($end - (Get-Date)).TotalMinutes), 1)
-            
-            Write-Host ("$mode Heartbeat #$counter | " + (Get-Date).ToString("HH:mm:ss") + " | $remaining mins remaining")
-            
-            # Every 5 minutes, show connection info
-            if ($counter % 5 -eq 0) {
-              Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-              Write-Host "  RDP: $env:TS_HOSTNAME ($env:TAILSCALE_IP)"
-              Write-Host "  User: $env:RDP_USER | Pass: $env:RDP_PASS"
-              Write-Host "  RustDesk ID: $env:RUSTDESK_ID | Pass: $env:RUSTDESK_PASS"
-              Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            }
-            
+            Write-Host ("$mode Heartbeat " + (Get-Date).ToString("HH:mm:ss") + " ends at " + $end.ToString("HH:mm:ss"))
             Start-Sleep -Seconds 60
           }
-          
-          Write-Host "`n🛑 Session time limit reached. Shutting down..."
 
       - name: Dispatch next or stop
         if: always()
@@ -420,10 +289,10 @@ Session Ends At: $(((Get-Date).AddMinutes([int]$env:RUNTIME_MINUTES)).ToString("
             if ($next -le 0) {
               $url = "https://api.github.com/repos/${{ github.repository }}/actions/workflows/rdp-tailscale-stop.yml/dispatches"
               $hdr = @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = "application/vnd.github+json" }
-              $payload = @{ ts_tailnet="${{ inputs.ts_tailnet }}"; ts_api_key="${{ inputs.ts_api_key }}"; base_prefix="Indonesia"; max_count="10"; dry_run="false" }
+              $payload = @{ ts_tailnet="${{ inputs.ts_tailnet }}"; ts_api_key="${{ inputs.ts_api_key }}"; base_prefix="bullet"; max_count="10"; dry_run="false" }
               $body = @{ ref="${{ github.ref_name }}"; inputs=$payload } | ConvertTo-Json -Depth 20
               Invoke-WebRequest -Method POST -Uri $url -Headers $hdr -Body $body | Out-Null
-              Write-Host "Dispatched STOP workflow."
+              Write-Host "Dispatched STOP."
             } else {
               $payload = @{
                 ts_tailnet      = "${{ inputs.ts_tailnet }}"
@@ -443,4 +312,4 @@ Session Ends At: $(((Get-Date).AddMinutes([int]$env:RUNTIME_MINUTES)).ToString("
               Invoke-WebRequest -Method POST -Uri $url2 -Headers $hdr2 -Body $body2 | Out-Null
               Write-Host "Dispatched Workflow B with cycles=$next"
             }
-          } else { Write-Host "No cycles configured. Session complete." }
+          } else { Write-Host "No cycles configured. Done." }
